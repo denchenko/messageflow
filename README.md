@@ -6,6 +6,8 @@
 
 MessageFlow is a Go library and CLI tool for visualizing AsyncAPI specifications. It provides tools to parse AsyncAPI documents and transform them into visual formats, making it easier to understand message flows and service interactions in asynchronous systems.
 
+It is part of the [HolyDOCs](https://github.com/holydocs/holydocs) umbrella project, which creates unified, interactive documentation for microservices architectures.
+
 ## Use Cases
 
 ### Single Service
