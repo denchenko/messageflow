@@ -1,0 +1,22 @@
+flowchart TD
+{{- range .Services }}
+    {{- $nodeID := sanitizeNodeID .Name }}
+    {{ $nodeID }}["<b>{{.Name}}</b><hr/>{{.Description}}"]
+
+{{- end }}
+{{- range .Connections }}
+    {{- $fromID := sanitizeNodeID .From }}
+    {{- $toID := sanitizeNodeID .To }}
+    {{- if .Bidirectional }}
+    {{ $fromID }} <-->|"{{.Label}}"| {{ $toID }}
+
+    {{- else }}
+    {{ $fromID }} -->|"{{.Label}}"| {{ $toID }}
+
+    {{- end }}
+{{- end }}
+
+{{- range .Services }}
+    {{- $nodeID := sanitizeNodeID .Name }}
+    style {{ $nodeID }} fill:#95A5A6,stroke:#7F8C8D,stroke-width:2px,color:#fff
+{{- end }}

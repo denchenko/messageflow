@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"text/template"
 	"unicode"
 
@@ -25,6 +26,20 @@ type Metadata struct {
 	Changelogs []messageflow.Changelog `json:"changelogs"`
 }
 
+// DiagramData holds either an SVG file path (for D2) or Mermaid code (for Mermaid)
+type DiagramData struct {
+	Type    messageflow.TargetType
+	SVGPath string // For D2
+	Mermaid string // For Mermaid
+}
+
+// DiagramCollection holds all diagram data
+type DiagramCollection struct {
+	ContextDiagram  DiagramData
+	ServiceDiagrams map[string]DiagramData // service name -> diagram
+	ChannelDiagrams map[string]DiagramData // channel name -> diagram
+}
+
 func Generate(
 	ctx context.Context,
 	schema messageflow.Schema,
@@ -36,11 +51,12 @@ func Generate(
 		return nil, fmt.Errorf("error processing metadata: %w", err)
 	}
 
-	if err := generateDiagrams(ctx, schema, target, outputDir); err != nil {
+	diagramCollection, err := generateDiagrams(ctx, schema, target, outputDir)
+	if err != nil {
 		return nil, fmt.Errorf("error generating diagrams: %w", err)
 	}
 
-	if err := createREADMEContent(schema, title, metadata.Changelogs, outputDir); err != nil {
+	if err := createREADMEContent(schema, title, metadata.Changelogs, outputDir, diagramCollection); err != nil {
 		return nil, fmt.Errorf("error creating README content: %w", err)
 	}
 
@@ -87,40 +103,91 @@ func generateDiagrams(
 	schema messageflow.Schema,
 	target messageflow.Target,
 	outputDir string,
-) error {
+) (*DiagramCollection, error) {
 	diagramsDir := filepath.Join(outputDir, "diagrams")
 	if err := os.RemoveAll(diagramsDir); err != nil {
-		return fmt.Errorf("error removing old diagrams directory: %w", err)
+		return nil, fmt.Errorf("error removing old diagrams directory: %w", err)
 	}
 
-	if err := os.MkdirAll(diagramsDir, 0755); err != nil {
-		return fmt.Errorf("error creating diagrams directory: %w", err)
+	// Only create diagrams directory for D2 (SVG files)
+	// For Mermaid, diagrams are embedded in markdown
+	formatType := getTargetType(target)
+	if formatType == messageflow.TargetType("d2") {
+		if err := os.MkdirAll(diagramsDir, 0755); err != nil {
+			return nil, fmt.Errorf("error creating diagrams directory: %w", err)
+		}
 	}
 
 	channels := extractUniqueChannels(schema)
 
+	collection := &DiagramCollection{
+		ServiceDiagrams: make(map[string]DiagramData),
+		ChannelDiagrams: make(map[string]DiagramData),
+	}
+
 	g, ctx := errgroup.WithContext(ctx)
+
+	var contextDiagram DiagramData
 	g.Go(func() error {
-		return generateContextDiagram(ctx, schema, target, outputDir)
+		var err error
+		contextDiagram, err = generateContextDiagram(ctx, schema, target, outputDir, formatType)
+		return err
 	})
 
+	serviceDiagrams := make(map[string]DiagramData)
+	serviceMutex := &sync.Mutex{}
 	for _, service := range schema.Services {
+		serviceName := service.Name
 		g.Go(func() error {
-			return generateServiceServicesDiagram(ctx, schema, target, service.Name, outputDir)
+			diagram, err := generateServiceServicesDiagram(ctx, schema, target, serviceName, outputDir, formatType)
+			if err != nil {
+				return err
+			}
+			serviceMutex.Lock()
+			serviceDiagrams[serviceName] = diagram
+			serviceMutex.Unlock()
+			return nil
 		})
 	}
 
+	channelDiagrams := make(map[string]DiagramData)
+	channelMutex := &sync.Mutex{}
 	for _, channel := range channels {
+		channelName := channel
 		g.Go(func() error {
-			return generateChannelServicesDiagram(ctx, schema, target, channel, outputDir)
+			diagram, err := generateChannelServicesDiagram(ctx, schema, target, channelName, outputDir, formatType)
+			if err != nil {
+				return err
+			}
+			channelMutex.Lock()
+			channelDiagrams[channelName] = diagram
+			channelMutex.Unlock()
+			return nil
 		})
 	}
 
 	if err := g.Wait(); err != nil {
-		return fmt.Errorf("error generating diagrams: %w", err)
+		return nil, fmt.Errorf("error generating diagrams: %w", err)
 	}
 
-	return nil
+	collection.ContextDiagram = contextDiagram
+	collection.ServiceDiagrams = serviceDiagrams
+	collection.ChannelDiagrams = channelDiagrams
+
+	return collection, nil
+}
+
+func getTargetType(target messageflow.Target) messageflow.TargetType {
+	// Create a dummy formatted schema to determine the type
+	// We'll use FormatSchema with a minimal schema to get the type
+	ctx := context.Background()
+	opts := messageflow.FormatOptions{Mode: messageflow.FormatModeContextServices}
+	fs, err := target.FormatSchema(ctx, messageflow.Schema{Services: []messageflow.Service{}}, opts)
+	if err != nil {
+		// Fallback: assume d2 for backward compatibility
+		return messageflow.TargetType("d2")
+	}
+	return fs.Type
 }
 
 func generateContextDiagram(
@@ -128,27 +195,37 @@ func generateContextDiagram(
 	schema messageflow.Schema,
 	target messageflow.Target,
 	outputDir string,
-) error {
+	formatType messageflow.TargetType,
+) (DiagramData, error) {
 	formatOpts := messageflow.FormatOptions{
 		Mode: messageflow.FormatModeContextServices,
 	}
 
 	formattedSchema, err := target.FormatSchema(ctx, schema, formatOpts)
 	if err != nil {
-		return fmt.Errorf("error formatting context schema: %w", err)
+		return DiagramData{}, fmt.Errorf("error formatting context schema: %w", err)
 	}
 
 	diagram, err := target.RenderSchema(ctx, formattedSchema)
 	if err != nil {
-		return fmt.Errorf("error rendering context diagram: %w", err)
+		return DiagramData{}, fmt.Errorf("error rendering context diagram: %w", err)
 	}
 
-	contextPath := filepath.Join(outputDir, "diagrams", "context.svg")
-	if err := os.WriteFile(contextPath, diagram, 0644); err != nil {
-		return fmt.Errorf("error writing context diagram: %w", err)
+	if formatType == messageflow.TargetType("d2") {
+		contextPath := filepath.Join(outputDir, "diagrams", "context.svg")
+		if err := os.WriteFile(contextPath, diagram, 0644); err != nil {
+			return DiagramData{}, fmt.Errorf("error writing context diagram: %w", err)
+		}
+		return DiagramData{
+			Type:    formatType,
+			SVGPath: "diagrams/context.svg",
+		}, nil
 	}
 
-	return nil
+	return DiagramData{
+		Type:    formatType,
+		Mermaid: string(diagram),
+	}, nil
 }
 
 func generateServiceServicesDiagram(
@@ -157,7 +234,8 @@ func generateServiceServicesDiagram(
 	target messageflow.Target,
 	serviceName string,
 	outputDir string,
-) error {
+	formatType messageflow.TargetType,
+) (DiagramData, error) {
 	formatOpts := messageflow.FormatOptions{
 		Mode:    messageflow.FormatModeServiceServices,
 		Service: serviceName,
@@ -165,21 +243,30 @@ func generateServiceServicesDiagram(
 
 	formattedSchema, err := target.FormatSchema(ctx, schema, formatOpts)
 	if err != nil {
-		return fmt.Errorf("error formatting service services schema: %w", err)
+		return DiagramData{}, fmt.Errorf("error formatting service services schema: %w", err)
 	}
 
 	diagram, err := target.RenderSchema(ctx, formattedSchema)
 	if err != nil {
-		return fmt.Errorf("error rendering service services diagram: %w", err)
+		return DiagramData{}, fmt.Errorf("error rendering service services diagram: %w", err)
 	}
 
-	serviceAnchor := sanitizeAnchor(serviceName)
-	servicePath := filepath.Join(outputDir, "diagrams", fmt.Sprintf("service_%s.svg", serviceAnchor))
-	if err := os.WriteFile(servicePath, diagram, 0644); err != nil {
-		return fmt.Errorf("error writing service diagram for %s: %w", serviceName, err)
+	if formatType == messageflow.TargetType("d2") {
+		serviceAnchor := sanitizeAnchor(serviceName)
+		servicePath := filepath.Join(outputDir, "diagrams", fmt.Sprintf("service_%s.svg", serviceAnchor))
+		if err := os.WriteFile(servicePath, diagram, 0644); err != nil {
+			return DiagramData{}, fmt.Errorf("error writing service diagram for %s: %w", serviceName, err)
+		}
+		return DiagramData{
+			Type:    formatType,
+			SVGPath: fmt.Sprintf("diagrams/service_%s.svg", serviceAnchor),
+		}, nil
 	}
 
-	return nil
+	return DiagramData{
+		Type:    formatType,
+		Mermaid: string(diagram),
+	}, nil
 }
 
 func generateChannelServicesDiagram(
@@ -188,7 +275,8 @@ func generateChannelServicesDiagram(
 	target messageflow.Target,
 	channel string,
 	outputDir string,
-) error {
+	formatType messageflow.TargetType,
+) (DiagramData, error) {
 	formatOpts := messageflow.FormatOptions{
 		Mode:         messageflow.FormatModeChannelServices,
 		Channel:      channel,
@@ -197,21 +285,30 @@ func generateChannelServicesDiagram(
 
 	formattedSchema, err := target.FormatSchema(ctx, schema, formatOpts)
 	if err != nil {
-		return fmt.Errorf("error formatting channel services schema: %w", err)
+		return DiagramData{}, fmt.Errorf("error formatting channel services schema: %w", err)
 	}
 
 	diagram, err := target.RenderSchema(ctx, formattedSchema)
 	if err != nil {
-		return fmt.Errorf("error rendering channel services diagram: %w", err)
+		return DiagramData{}, fmt.Errorf("error rendering channel services diagram: %w", err)
 	}
 
-	channelAnchor := sanitizeAnchor(channel)
-	channelPath := filepath.Join(outputDir, "diagrams", fmt.Sprintf("channel_%s.svg", channelAnchor))
-	if err := os.WriteFile(channelPath, diagram, 0644); err != nil {
-		return fmt.Errorf("error writing channel diagram for %s: %w", channel, err)
+	if formatType == messageflow.TargetType("d2") {
+		channelAnchor := sanitizeAnchor(channel)
+		channelPath := filepath.Join(outputDir, "diagrams", fmt.Sprintf("channel_%s.svg", channelAnchor))
+		if err := os.WriteFile(channelPath, diagram, 0644); err != nil {
+			return DiagramData{}, fmt.Errorf("error writing channel diagram for %s: %w", channel, err)
+		}
+		return DiagramData{
+			Type:    formatType,
+			SVGPath: fmt.Sprintf("diagrams/channel_%s.svg", channelAnchor),
+		}, nil
 	}
 
-	return nil
+	return DiagramData{
+		Type:    formatType,
+		Mermaid: string(diagram),
+	}, nil
 }
 
 func extractUniqueChannels(schema messageflow.Schema) []string {
@@ -235,7 +332,7 @@ func extractUniqueChannels(schema messageflow.Schema) []string {
 	return channels
 }
 
-func createREADMEContent(schema messageflow.Schema, title string, changelogs []messageflow.Changelog, outputDir string) error {
+func createREADMEContent(schema messageflow.Schema, title string, changelogs []messageflow.Changelog, outputDir string, diagramCollection *DiagramCollection) error {
 	tmpl, err := template.New("readme.tmpl").Funcs(template.FuncMap{
 		"Anchor": func(name string) string {
 			return sanitizeAnchor(name)
@@ -277,17 +374,19 @@ func createREADMEContent(schema messageflow.Schema, title string, changelogs []m
 	})
 
 	data := struct {
-		Title       string
-		Services    []messageflow.Service
-		Channels    []string
-		ChannelInfo map[string]ChannelInfo
-		Changelogs  []messageflow.Changelog
+		Title             string
+		Services          []messageflow.Service
+		Channels          []string
+		ChannelInfo       map[string]ChannelInfo
+		Changelogs        []messageflow.Changelog
+		DiagramCollection *DiagramCollection
 	}{
-		Title:       title,
-		Services:    schema.Services,
-		Channels:    channels,
-		ChannelInfo: channelInfo,
-		Changelogs:  changelogs,
+		Title:             title,
+		Services:          schema.Services,
+		Channels:          channels,
+		ChannelInfo:       channelInfo,
+		Changelogs:        changelogs,
+		DiagramCollection: diagramCollection,
 	}
 
 	var buf strings.Builder

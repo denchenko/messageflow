@@ -9,8 +9,10 @@ import (
 	"strings"
 
 	"github.com/holydocs/messageflow/internal/docs"
+	"github.com/holydocs/messageflow/pkg/messageflow"
 	"github.com/holydocs/messageflow/pkg/schema"
 	"github.com/holydocs/messageflow/pkg/schema/target/d2"
+	"github.com/holydocs/messageflow/pkg/schema/target/mermaid"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -36,6 +38,7 @@ Example:
 	c.cmd.Flags().String("asyncapi-files", "", "Paths to asyncapi files separated by comma")
 	c.cmd.Flags().String("output", ".", "Output directory for generated documentation")
 	c.cmd.Flags().String("title", "Message Flow", "Title of the documentation")
+	c.cmd.Flags().String("format", "d2", "Diagram format: d2 or mermaid (default: d2)")
 
 	return c
 }
@@ -65,6 +68,15 @@ func (c *Command) run(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("error creating output directory %s: %w", outputDir, err)
 	}
 
+	format, err := cmd.Flags().GetString("format")
+	if err != nil {
+		return fmt.Errorf("error getting format flag: %w", err)
+	}
+
+	if format != "d2" && format != "mermaid" {
+		return fmt.Errorf("invalid format: %s (must be 'd2' or 'mermaid')", format)
+	}
+
 	ctx := context.Background()
 
 	s, err := schema.Load(ctx, asyncAPIFilesPaths)
@@ -72,12 +84,23 @@ func (c *Command) run(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("error loading schema from files: %w", err)
 	}
 
-	d2Target, err := d2.NewTarget()
-	if err != nil {
-		return fmt.Errorf("error creating D2 target: %w", err)
+	var target messageflow.Target
+	switch format {
+	case "d2":
+		d2Target, err := d2.NewTarget()
+		if err != nil {
+			return fmt.Errorf("error creating D2 target: %w", err)
+		}
+		target = d2Target
+	case "mermaid":
+		mermaidTarget, err := mermaid.NewTarget()
+		if err != nil {
+			return fmt.Errorf("error creating Mermaid target: %w", err)
+		}
+		target = mermaidTarget
 	}
 
-	newChangelog, err := docs.Generate(ctx, s, d2Target, title, outputDir)
+	newChangelog, err := docs.Generate(ctx, s, target, title, outputDir)
 	if err != nil {
 		return fmt.Errorf("error generating documentation: %w", err)
 	}

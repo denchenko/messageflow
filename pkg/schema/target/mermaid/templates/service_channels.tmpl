@@ -1,0 +1,58 @@
+flowchart TD
+    {{- $serviceID := sanitizeNodeID .Name }}
+    {{ $serviceID }}["{{.Name}}"]
+    
+{{- if hasOperation .Operation "receive" false -}}
+    subgraph ReceiveFrom["Receive From"]
+    {{- range .Operation }}
+      {{- if and (eq .Action "receive") (not .Reply) }}
+      {{- $channelID := sanitizeNodeID .Channel.Name }}
+      {{ $channelID }}@{ shape: das, label: "{{.Channel.Name}}" }
+
+      {{- end }}
+    {{- end }}
+    end
+    ReceiveFrom --> {{ $serviceID }}
+
+{{- end }}
+{{- if hasOperation .Operation "send" false }}
+    subgraph SendTo["Send To"]
+    {{- range .Operation }}
+      {{- if and (eq .Action "send") (not .Reply) }}
+      {{- $channelID := sanitizeNodeID .Channel.Name }}
+      {{ $channelID }}@{ shape: das, label: "{{.Channel.Name}}" }
+
+      {{- end }}
+    {{- end }}
+    end
+    {{ $serviceID }} --> SendTo
+
+{{- end }}
+{{- if hasOperation .Operation "receive" true }}
+    subgraph ReplyTo["Reply To"]
+    {{- range .Operation }}
+      {{- if and (eq .Action "receive") .Reply }}
+      {{- $channelID := sanitizeNodeID .Channel.Name }}
+      {{ $channelID }}@{ shape: das, label: "{{.Channel.Name}}" }
+
+      {{- end }}
+    {{- end }}
+    end
+    ReplyTo --> {{ $serviceID }}
+
+{{- end }}
+{{- if hasOperation .Operation "send" true }}
+    subgraph RequestFrom["Request From"]
+    {{- range .Operation }}
+      {{- if and (eq .Action "send") .Reply }}
+      {{- $channelID := sanitizeNodeID .Channel.Name }}
+      {{ $channelID }}@{ shape: das, label: "{{.Channel.Name}}" }
+
+      {{- end }}
+    {{- end }}
+    end
+    {{ $serviceID }} --> RequestFrom
+
+{{- end }}
+
+    style {{ $serviceID }} fill:#3498db,stroke:#2980b9,stroke-width:2px,color:#fff

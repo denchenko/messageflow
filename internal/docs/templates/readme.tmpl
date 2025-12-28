@@ -17,7 +17,14 @@
 
 ## Context
 
-![Context](diagrams/context.svg)
+{{- $diagram := $.DiagramCollection.ContextDiagram }}
+{{- if eq $diagram.Type "d2" }}
+![Context]({{$diagram.SVGPath}})
+{{- else if eq $diagram.Type "mermaid" }}
+```mermaid
+{{$diagram.Mermaid}}
+```
+{{- end }}
 
 ## Services
 
@@ -27,7 +34,14 @@
 
 {{.Description}}
 
-![{{.Name}} Service Channels](diagrams/service_{{Anchor .Name}}.svg)
+{{- $diagram := index $.DiagramCollection.ServiceDiagrams .Name }}
+{{- if eq $diagram.Type "d2" }}
+![{{.Name}} Service Channels]({{$diagram.SVGPath}})
+{{- else if eq $diagram.Type "mermaid" }}
+```mermaid
+{{$diagram.Mermaid}}
+```
+{{- end }}
 
 {{- end }}
 
@@ -37,7 +51,14 @@
 
 ### {{.}}
 
-![{{.}} Channel Services](diagrams/channel_{{Anchor .}}.svg)
+{{- $diagram := index $.DiagramCollection.ChannelDiagrams . }}
+{{- if eq $diagram.Type "d2" }}
+![{{.}} Channel Services]({{$diagram.SVGPath}})
+{{- else if eq $diagram.Type "mermaid" }}
+```mermaid
+{{$diagram.Mermaid}}
+```
+{{- end }}
 
 {{- $channelInfo := index $.ChannelInfo . }}
 {{- if $channelInfo.Messages }}
