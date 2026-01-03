@@ -1,0 +1,59 @@
+flowchart TD
+    {{- $mainServiceID := sanitizeNodeID .MainService.Name }}
+    {{ $mainServiceID }}["{{.MainService.Name}}"]
+    
+    {{- range .MainService.Operation }}
+    {{- $channelID := sanitizeNodeID .Channel.Name }}
+    {{ $channelID }}@{ shape: das, label: "{{.Channel.Name}}" }
+    {{- if eq .Action "receive" }}
+      {{- if .Reply }}
+      {{ $channelID }} -->|"Reply"| {{ $mainServiceID }}
+
+      {{- else }}
+      {{ $channelID }} -->|"Receive"| {{ $mainServiceID }}
+
+      {{- end }}
+    {{- end }}
+    {{- if eq .Action "send" }}
+      {{- if .Reply }}
+      {{ $mainServiceID }} -->|"Request"| {{ $channelID }}
+
+      {{- else }}
+      {{ $mainServiceID }} -->|"Send"| {{ $channelID }}
+
+      {{- end }}
+    {{- end }}
+    {{- end }}
+    
+    {{- range .NeighborServices }}
+    {{- $neighborID := sanitizeNodeID .Name }}
+    {{ $neighborID }}["{{.Name}}"]
+    {{- $neighborService := . -}}
+    {{- range .Operation }}
+      {{- $neighborOp := . -}}
+      {{- if eq .Action "send" }}
+        {{- range $.MainService.Operation }}
+          {{- if and (eq .Action "receive") (eq .Channel.Name $neighborOp.Channel.Name) }}
+          {{- $channelID := sanitizeNodeID $neighborOp.Channel.Name }}
+          {{ $neighborID }} --> {{ $channelID }}
+
+          {{- end }}
+        {{- end }}
+      {{- end }}
+      {{- if eq .Action "receive" }}
+        {{- range $.MainService.Operation }}
+          {{- if and (eq .Action "send") (eq .Channel.Name $neighborOp.Channel.Name) }}
+          {{- $channelID := sanitizeNodeID $neighborOp.Channel.Name }}
+          {{ $channelID }} --> {{ $neighborID }}
+
+          {{- end }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+    {{- end }}
+
+    style {{ $mainServiceID }} fill:#3498db,stroke:#2980b9,stroke-width:2px,color:#fff
+    {{- range .NeighborServices }}
+    {{- $neighborID := sanitizeNodeID .Name }}
+    style {{ $neighborID }} fill:#95A5A6,stroke:#7F8C8D,stroke-width:2px,color:#fff
+    {{- end }}

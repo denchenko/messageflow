@@ -1,0 +1,43 @@
+flowchart LR
+    {{- $channelID := sanitizeNodeID .Channel }}
+    {{ $channelID }}@{ shape: das, label: "{{.Channel}}" }
+    
+{{- if .Senders }}
+    {{- range .Senders }}
+    {{- $senderID := sanitizeNodeID . }}
+    {{ $senderID }}["{{.}}"]
+    {{- if $.ReplyMessage }}
+    {{ $senderID }} -->|"Request"| {{ $channelID }}
+
+    {{- else }}
+    {{ $senderID }} -->|"Send"| {{ $channelID }}
+
+    {{- end }}
+    {{- end }}
+{{- end }}
+{{- if .Receivers }}
+    {{- range .Receivers }}
+    {{- $receiverID := sanitizeNodeID . }}
+    {{ $receiverID }}["{{.}}"]
+    {{- if $.ReplyMessage }}
+    {{ $channelID }} -->|"Reply"| {{ $receiverID }}
+
+    {{- else }}
+    {{ $channelID }} -->|"Receive"| {{ $receiverID }}
+
+    {{- end }}
+    {{- end }}
+{{- end }}
+
+{{- if .Senders }}
+    {{- range .Senders }}
+    {{- $senderID := sanitizeNodeID . }}
+    style {{ $senderID }} fill:#95A5A6,stroke:#7F8C8D,stroke-width:2px,color:#fff
+    {{- end }}
+{{- end }}
+{{- if .Receivers }}
+    {{- range .Receivers }}
+    {{- $receiverID := sanitizeNodeID . }}
+    style {{ $receiverID }} fill:#95A5A6,stroke:#7F8C8D,stroke-width:2px,color:#fff
+    {{- end }}
+{{- end }}
